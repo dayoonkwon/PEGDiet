@@ -13,13 +13,103 @@ library(phyloseq)
 library(ggplot2)
 library(Maaslin2)
 library(microbiome)
+library(dada2)
+library(Biostrings)
 ```
 
 # Introduction
 
 This file documents code used to perform the main statistical analyses detailed in the manuscript ***Diet and the Gut Microbiome in Patients with Parkinson’s Disease***.
 
-# Alpha diversity analysis
+# Bioinformatic processing of sequences
+
+Sequence reads were quality-filtered using the [DADA2 pipeline](https://benjjneb.github.io/dada2/tutorial.html)
+
+```{r}
+# Forward and reverse fastq filenames have format: SAMPLENAME_R1_001.fastq and SAMPLENAME_R2_001.fastq
+fnFs <- sort(list.files(path, pattern="_R1_001.fastq", full.names = TRUE))
+fnRs <- sort(list.files(path, pattern="_R2_001.fastq", full.names = TRUE))
+fnFs
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+sample.names
+
+plotQualityProfile(fnFs[1:2])
+
+plotQualityProfile(fnRs[1:2])
+
+# Place filtered files in filtered/ subdirectory
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, truncLen=c(240,140),trimLeft=c(10,10), 
+                     maxN=0, maxEE=c(2,2), truncQ=2, rm.phix=TRUE, compress=TRUE, multithread=FALSE) # On Windows set multithread=FALSE
+head(out)
+
+errF <- learnErrors(filtFs, multithread=TRUE)
+errR <- learnErrors(filtRs, multithread=TRUE)
+
+plotErrors(errF, nominalQ=TRUE)
+plotErrors(errR, nominalQ=TRUE)
+
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+
+dadaFs[[1]]
+
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+
+taxa <- assignTaxonomy(seqtab.nochim, "silva_nr_v132_train_set.fa.gz", multithread=TRUE)
+taxa <- addSpecies(taxa, "silva_species_assignment_v132.fa.gz")
+
+taxa.print <- taxa # Removing sequence rownames for display only
+rownames(taxa.print) <- NULL
+head(taxa.print)
+
+theme_set(theme_bw())
+
+samdf <- read.csv("Meta219_11132021_full.csv", row.names=1)
+
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
+               sample_data(samdf), 
+               tax_table(taxa))
+
+ps <- prune_samples(sample_names(ps) != "Mock", ps) # Remove mock sample
+
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+```
+
+# Statistical analyses
+
+## Alpha diversity analysis
 
 ```{r}
 shannon <- vegan::diversity(ps4@otu_table, index = "shannon")
@@ -83,7 +173,7 @@ sugar_alpha = ggplot(alphadiv,aes(x = sugar_cat, y = shannon, fill = sugar_cat))
   annotate("text", x = 3.2, y = 1.8, label = "P-trend = 0.364", size=5)
 ```
 
-# Principal Component Analysis
+## Principal Component Analysis
 
 ```{r}
 data_otu_filt_rar = data.frame(otu_table(ps4)) # create a separated file
@@ -179,9 +269,9 @@ sugar_beta = plot_ordination(ps4, pcoa_bc, type="samples", color="sugar_cat", sh
   annotate("text", x = 0.3, y = -0.46, label = "R2 = 0.017\nP-trend = 0.044", size=5, hjust = 0)
 ```
 
-# Relative abundance analysis
+## Relative abundance analysis
 
-## Phylum level relative abundance
+### Phylum level relative abundance
 
 ```{r}
 mycolors=c("#A6CEE3","#1F78B4","#B2DF8A","#33A02C","#FB9A99","#E31A1C",
@@ -242,7 +332,7 @@ sugar_phylum = physeqF %>%
         legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
 ```
 
-## Genus level relative abundance
+### Genus level relative abundance
 
 ```{r}
 physeqGenus = tax_glom(ps4, "Genus")
@@ -298,7 +388,7 @@ sugar_genus = physeqG %>%
         legend.title = element_text(size=18,color="black",face="bold"), legend.text = element_text(size=18,color="black")) 
 ```
 
-# Differential abundance of genera
+## Differential abundance of genera
 
 ```{r}
 hei_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
