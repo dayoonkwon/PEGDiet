@@ -175,7 +175,7 @@ sugar_alpha = ggplot(alphadiv,aes(x = sugar_cat, y = shannon, fill = sugar_cat))
 
 ## Principal Component Analysis
 
-```{r}
+```{r, warning=FALSE}
 data_otu_filt_rar = data.frame(otu_table(ps4)) # create a separated file
 dist_bc = as.matrix(vegdist(data_otu_filt_rar, method = "bray")) 
 
@@ -273,7 +273,7 @@ sugar_beta = plot_ordination(ps4, pcoa_bc, type="samples", color="sugar_cat", sh
 
 ### Phylum level relative abundance
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 mycolors=c("#A6CEE3","#1F78B4","#B2DF8A","#33A02C","#FB9A99","#E31A1C",
            "#FDBF6F","#FF7F00","#CAB2D6","#6A3D9A","#FFFF99","#E6AB02",
            "#E5C494","#B15928","#D9D9D9","#B3B3B3","#80B1D3","#386CB0",
@@ -334,7 +334,7 @@ sugar_phylum = physeqF %>%
 
 ### Genus level relative abundance
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 physeqGenus = tax_glom(ps4, "Genus")
 physeqGenusRA = transform_sample_counts(physeqGenus, function(x) x/sum(x))
 physeqGenusRAF = filter_taxa(physeqGenusRA, function(x) mean(x) > 0.01, TRUE)
@@ -409,7 +409,10 @@ hei_maslin2 = hei_maslin$results %>%
   mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
   merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
   select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(coef=round(coef,2),
+  mutate(fc = coef/log(2),
+         fc_ll = (coef-(1.96*stderr))/log(2),
+         fc_up = (coef+(1.96*stderr))/log(2),
+         coef=round(coef,2),
          stderr=round(stderr,2),
          pval=round(pval,3),
          qval=round(qval,3))
@@ -431,7 +434,10 @@ fiber_maslin2 = fiber_maslin$results %>%
   mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
   merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
   select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(coef=round(coef,2),
+  mutate(fc = coef/log(2),
+         fc_ll = (coef-(1.96*stderr))/log(2),
+         fc_up = (coef+(1.96*stderr))/log(2),
+         coef=round(coef,2),
          stderr=round(stderr,2),
          pval=round(pval,3),
          qval=round(qval,3))
@@ -454,19 +460,22 @@ sugar_maslin2 = sugar_maslin$results %>%
   mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
   merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
   select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(coef=round(coef,2),
+  mutate(fc = coef/log(2),
+         fc_ll = (coef-(1.96*stderr))/log(2),
+         fc_up = (coef+(1.96*stderr))/log(2),
+         coef=round(coef,2),
          stderr=round(stderr,2),
          pval=round(pval,3),
          qval=round(qval,3))
 
 hei_taxa = hei_maslin2 %>%
   filter(qval<0.05) %>%
-  ggplot(aes(x=reorder(Genus,-coef,sum), y=coef, fill=Phylum)) +
+  ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
   scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
   geom_bar(stat="identity", width=0.5,color="black") +
-  geom_errorbar(aes(ymin=coef-stderr, ymax=coef+stderr), width=.2,
+  geom_errorbar(aes(ymin=fc_ll, ymax=fc_up), width=.2,
                  position=position_dodge(.9)) +
-  labs(x = "Genus", y = "Fold Change", title = "HEI Tertile") +
+  labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "HEI Tertile") +
   geom_hline(yintercept=0) +
   scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C","#FDBF6F")) + 
   theme_bw() +
@@ -477,12 +486,12 @@ hei_taxa = hei_maslin2 %>%
 
 fiber_taxa = fiber_maslin2 %>%
   filter(qval<0.05) %>%
-  ggplot(aes(x=reorder(Genus,-coef,sum), y=coef, fill=Phylum)) +
+  ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
   scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
   geom_bar(stat="identity", width=0.5,color="black") +
-    geom_errorbar(aes(ymin=coef-stderr, ymax=coef+stderr), width=.2,
+    geom_errorbar(aes(ymin=fc_ll, ymax=fc_up), width=.2,
                  position=position_dodge(.9)) +
-  labs(x = "Genus", y = "Fold Change", title = "Dietary Fiber Tertile") +
+  labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "Dietary Fiber Tertile") +
   geom_hline(yintercept=0) +
   scale_fill_manual("Phylum", values = c("#1F78B4","#33A02C")) +  
   theme_bw() +
@@ -493,12 +502,12 @@ fiber_taxa = fiber_maslin2 %>%
 
 sugar_taxa = sugar_maslin2 %>%
   filter(qval<0.05) %>%
-  ggplot(aes(x=reorder(Genus,-coef,sum), y=coef, fill=Phylum)) +
+  ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
   scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
   geom_bar(stat="identity", width=0.5,color="black") +
-    geom_errorbar(aes(ymin=coef-stderr, ymax=coef+stderr), width=.2,
+    geom_errorbar(aes(ymin=fc_ll, ymax=fc_up), width=.2,
                  position=position_dodge(.9)) +
-  labs(x = "Genus", y = "Fold Change", title = "Added Sugar Tertile") +
+  labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "Added Sugar Tertile") +
   geom_hline(yintercept=0) +
   scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C","#FB9A99","#FDBF6F")) +  
   theme_bw() +
