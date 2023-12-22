@@ -1,0 +1,419 @@
+---
+title: "Diet and the Gut Microbiome in Patients with Parkinson’s Disease"
+author: "Dayoon Kwon"
+date: "2023-12-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(vegan)
+library(phyloseq)
+library(ggplot2)
+library(Maaslin2)
+library(microbiome)
+```
+
+# Introduction
+
+This file documents code used to perform the main statistical analyses detailed in the manuscript ***Diet and the Gut Microbiome in Patients with Parkinson’s Disease***.
+
+# Alpha diversity analysis
+
+```{r}
+shannon <- vegan::diversity(ps4@otu_table, index = "shannon")
+alphadiv <- cbind(ps4@sam_data, shannon)
+
+x1=summary(lm(shannon~hei_cat+age+sex+race+platform,data=alphadiv))$coefficients
+x1.1=summary(lm(shannon~hei_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+
+x2=summary(lm(shannon~fiber_cat+age+sex+race+platform,data=alphadiv))$coefficients
+x2.1=summary(lm(shannon~fiber_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+
+x3=summary(lm(shannon~sugar_cat+age+sex+race+platform,data=alphadiv))$coefficients
+x3.1=summary(lm(shannon~sugar_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+
+alpha_func=function(x,y) {
+  c(paste(round(x[2,1],2), " (",round(x[2,1]-1.96*x[2,2],2),", ",round(x[2,1]+1.96*x[2,2],2),")",sep=""),
+    paste(round(x[3,1],2), " (",round(x[3,1]-1.96*x[3,2],2),", ",round(x[3,1]+1.96*x[3,2],2),")",sep=""),
+    round(y[2,4],3))
+}
+
+table1=rbind(alpha_func(x1,x1.1),alpha_func(x2,x2.1),alpha_func(x3,x3.1))
+
+hei_alpha = alphadiv %>%
+  ggplot(.,aes(x = hei_cat, y = shannon, fill = hei_cat)) +
+  geom_boxplot(outlier.color = NULL,lwd=1) +
+  scale_fill_manual(name = "HEI Tertile", values = c("#EF6548","#FDBF6F","#41B6C4"), labels=c("Low","Intermediate","High")) +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  labs(x = "HEI Tertile", y = "Shannon Index") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,color="black"),axis.text.y=element_text(size=18,color="black"),
+        legend.text = element_text(size=18,color="black"),legend.title = element_text(size=18, face="bold")) +
+  guides(fill="none") +
+  annotate("text", x = 3.2, y = 1.8, label = "P-trend = 0.603", size=5)
+
+fiber_alpha = ggplot(alphadiv,aes(x = fiber_cat, y = shannon, fill = fiber_cat)) +
+  geom_boxplot(outlier.color = NULL,lwd=1) +
+  scale_fill_manual(name = "Dietary Fiber Tertile", values = c("#EF6548","#FDBF6F","#41B6C4"), labels=c("Low","Intermediate","High")) +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  labs(x = "Dietary Fiber Tertile", y = "Shannon Index") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,color="black"),axis.text.y=element_text(size=18,color="black"),
+        legend.text = element_text(size=18,color="black"),legend.title = element_text(size=18, face="bold")) +
+  guides(fill="none")+
+  annotate("text", x = 3.2, y = 1.8, label = "P-trend = 0.888", size=5)
+
+sugar_alpha = ggplot(alphadiv,aes(x = sugar_cat, y = shannon, fill = sugar_cat)) +
+  geom_boxplot(outlier.color = NULL,lwd=1) +
+  scale_fill_manual(name = "Added Sugar Tertile", values = c("#EF6548","#FDBF6F","#41B6C4"), labels=c("Low","Intermediate","High")) +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  labs(x = "Added Sugar Tertile", y = "Shannon Index") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,color="black"),axis.text.y=element_text(size=18,color="black"),
+        legend.text = element_text(size=18,color="black"),legend.title = element_text(size=18, face="bold")) +
+  guides(fill="none") +
+  annotate("text", x = 3.2, y = 1.8, label = "P-trend = 0.364", size=5)
+```
+
+# Principal Component Analysis
+
+```{r}
+data_otu_filt_rar = data.frame(otu_table(ps4)) # create a separated file
+dist_bc = as.matrix(vegdist(data_otu_filt_rar, method = "bray")) 
+
+# a peek at the first five rows / columns
+dist_bc[1:5, 1:5]
+
+# calculate PCOA using Phyloseq package
+pcoa_bc = ordinate(ps4, "PCoA", "bray") 
+mds_dat<-data.frame(pcoa_bc$vectors)
+mds_dat$PEGID=row.names(mds_dat)
+mds2<-merge(mds_dat,data.frame(ps4@sam_data),by="PEGID")
+
+mody <- capscale(pcoa_bc$vectors~ 1)
+eig=eigenvals(mody)
+head(eig / sum(eig))
+
+clr1 =head(eig / sum(eig))[1]
+clr2 =head(eig / sum(eig))[2]
+
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+hei_cat2,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+fiber_cat2,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+sugar_cat2,
+       data=d, permutations=9999, method="bray")$aov.tab
+
+hei_beta = plot_ordination(ps4, pcoa_bc, type="samples", color="hei_cat", shape = "hei_cat") + 
+  geom_point(size = 4.5,) +
+  stat_ellipse(aes(group = hei_cat), linetype = 2, size=1) +
+  geom_vline(xintercept=0, linetype="dotted", alpha = 0.8) +
+  geom_hline(yintercept=0, linetype="dotted", alpha = 0.8) +
+  labs(x ="PC-1 (8.7%)", y = "PC-2 (7.3%)") +
+  xlim(c(-0.5,0.5)) + 
+  ylim(c(-0.5,0.5)) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$hei_cat==0]),mean(mds2$Axis.2[mds2$hei_cat==0])), color="black", fill="#EF6548", size=5.5, pch=21) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$hei_cat==1]),mean(mds2$Axis.2[mds2$hei_cat==1])), color="black", fill="#FDBF6F", size=5.5, pch=24) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$hei_cat==2]),mean(mds2$Axis.2[mds2$hei_cat==2])), color="black", fill="#41B6C4", size=5.5, pch=22) +
+  scale_color_manual(name = "HEI Tertile", values = c("#EF6548","#FDBF6F","#41B6C4"), labels=c("Low","Intermediate","High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),
+        panel.background = element_blank(),legend.text = element_text(size=18,color="black"),
+        legend.title = element_text(size=18, face="bold"),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,color="black"),axis.text.y=element_text(size=18,color="black")) +
+  guides(shape = "none")+
+  annotate("text", x = 0.3, y = -0.46, label = "R2 = 0.017\nP-trend = 0.025", size=5, hjust = 0)
+
+fiber_beta = plot_ordination(ps4, pcoa_bc, type="samples", color="fiber_cat", shape = "fiber_cat") + 
+  geom_point(size = 4.5,) +
+  stat_ellipse(aes(group = fiber_cat), linetype = 2, size=1) +
+  geom_vline(xintercept=0, linetype="dotted", alpha = 0.8) +
+  geom_hline(yintercept=0, linetype="dotted", alpha = 0.8) +
+  labs(x ="PC-1 (8.7%)", y = "PC-2 (7.3%)") +
+  xlim(c(-0.5,0.5)) + 
+  ylim(c(-0.5,0.5)) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$fiber_cat==0]),mean(mds2$Axis.2[mds2$fiber_cat==0])), color="black", fill="#EF6548", size=5.5, pch=21) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$fiber_cat==1]),mean(mds2$Axis.2[mds2$fiber_cat==1])), color="black", fill="#FDBF6F", size=5.5, pch=24) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$fiber_cat==2]),mean(mds2$Axis.2[mds2$fiber_cat==2])), color="black", fill="#41B6C4", size=5.5, pch=22) +
+  scale_color_manual(name = "Dietary Fiber Tertile", values = c("#EF6548","#FDBF6F","#41B6C4"), labels=c("Low","Intermediate","High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),
+        panel.background = element_blank(),legend.text = element_text(size=18,color="black"),
+        legend.title = element_text(size=18, face="bold"),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,color="black"),axis.text.y=element_text(size=18,color="black")) +
+  guides(shape = "none") +
+  annotate("text", x = 0.3, y = -0.46, label = "R2 = 0.019\nP-trend = 0.011", size=5, hjust = 0)
+
+sugar_beta = plot_ordination(ps4, pcoa_bc, type="samples", color="sugar_cat", shape = "sugar_cat") + 
+  geom_point(size = 4.5,) +
+  stat_ellipse(aes(group = sugar_cat), linetype = 2, size=1) +
+  geom_vline(xintercept=0, linetype="dotted", alpha = 0.8) +
+  geom_hline(yintercept=0, linetype="dotted", alpha = 0.8) +
+  labs(x ="PC-1 (8.7%)", y = "PC-2 (7.3%)") +
+  xlim(c(-0.5,0.5)) + 
+  ylim(c(-0.5,0.5)) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$sugar_cat==0]),mean(mds2$Axis.2[mds2$sugar_cat==0])), color="black", fill="#EF6548", size=5.5, pch=21) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$sugar_cat==1]),mean(mds2$Axis.2[mds2$sugar_cat==1])), color="black", fill="#FDBF6F", size=5.5, pch=24) +
+  geom_point(aes(mean(mds2$Axis.1[mds2$sugar_cat==2]),mean(mds2$Axis.2[mds2$sugar_cat==2])), color="black", fill="#41B6C4", size=5.5, pch=22) +
+  scale_color_manual(name = "Added Sugar Tertile", values = c("#EF6548","#FDBF6F","#41B6C4"), labels=c("Low","Intermediate","High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),
+        panel.background = element_blank(),legend.text = element_text(size=18,color="black"),
+        legend.title = element_text(size=18, face="bold"),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,color="black"),axis.text.y=element_text(size=18,color="black")) +
+  guides(shape = "none") +
+  annotate("text", x = 0.3, y = -0.46, label = "R2 = 0.017\nP-trend = 0.044", size=5, hjust = 0)
+```
+
+# Relative abundance analysis
+
+## Phylum level relative abundance
+
+```{r}
+mycolors=c("#A6CEE3","#1F78B4","#B2DF8A","#33A02C","#FB9A99","#E31A1C",
+           "#FDBF6F","#FF7F00","#CAB2D6","#6A3D9A","#FFFF99","#E6AB02",
+           "#E5C494","#B15928","#D9D9D9","#B3B3B3","#80B1D3","#386CB0",
+           "#8DD3C7","#1B9E77","#FCCDE5","#FB8072","#BEBADA","#BC80BD",
+           "#FFD92F","#08306B")
+
+physeqPhylum = tax_glom(ps4, "Phylum")
+physeqPhylumRA = transform_sample_counts(physeqPhylum, function(x) x/sum(x))
+physeqPhylumRAF = filter_taxa(physeqPhylumRA, function(x) mean(x) > 0.01, TRUE)
+keepPhyla = get_taxa_unique(physeqPhylumRAF, "Phylum")
+physeqF = subset_taxa(ps4, Phylum  %in% keepPhyla) 
+
+hei_phylum = physeqF %>%
+  aggregate_taxa(level = "Phylum") %>%  
+  microViz::tax_sort(by="name") %>%
+  microbiome::transform(transform = "compositional") %>%
+  plot_composition(.,average_by = "hei_cat") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "HEI Tertile", y = "Relative abundance") +
+  scale_fill_brewer("Phylum", palette = "Paired") +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18,color="black"),
+        legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18))
+
+fiber_phylum = physeqF %>%
+  aggregate_taxa(level = "Phylum") %>%  
+  microViz::tax_sort(by="name") %>%
+  microbiome::transform(transform = "compositional") %>%
+  plot_composition(.,average_by = "fiber_cat") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Dietary Fiber Tertile", y = "Relative abundance") +
+  scale_fill_brewer("Phylum", palette = "Paired") +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18,color="black"),
+        legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+
+sugar_phylum = physeqF %>%
+  aggregate_taxa(level = "Phylum") %>% 
+  microViz::tax_sort(by="name") %>%
+  microbiome::transform(transform = "compositional") %>%
+  plot_composition(.,average_by = "sugar_cat") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Added Sugar Tertile", y = "Relative abundance") +
+  scale_fill_brewer("Phylum", palette = "Paired") +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18,color="black"),
+        legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+```
+
+## Genus level relative abundance
+
+```{r}
+physeqGenus = tax_glom(ps4, "Genus")
+physeqGenusRA = transform_sample_counts(physeqGenus, function(x) x/sum(x))
+physeqGenusRAF = filter_taxa(physeqGenusRA, function(x) mean(x) > 0.01, TRUE)
+keepGenus = get_taxa_unique(physeqGenusRAF, "Genus")
+physeqG = subset_taxa(ps4, Genus  %in% keepGenus) 
+physeqG@tax_table = sub("_", " ", physeqG@tax_table)
+
+hei_genus = physeqG %>%
+  aggregate_taxa(level = "Genus") %>%  
+  microViz::tax_sort(by="name") %>%
+  microbiome::transform(transform = "compositional") %>%
+  plot_composition(.,average_by = "hei_cat") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "HEI Tertile", y = "Relative abundance") +
+  scale_fill_manual("Genus", values = mycolors) +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18,color="black"),
+        legend.title = element_text(size=18,color="black",face="bold"), legend.text = element_text(size=18,color="black")) 
+
+fiber_genus = physeqG %>%
+  aggregate_taxa(level = "Genus") %>%  
+  microViz::tax_sort(by="name") %>%
+  microbiome::transform(transform = "compositional") %>%
+  plot_composition(.,average_by = "fiber_cat") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Dietary Fiber Tertile", y = "Relative abundance") +
+  scale_fill_manual("Genus", values = mycolors) +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18,color="black"),
+        legend.title = element_text(size=18,color="black",face="bold"), legend.text = element_text(size=18,color="black")) 
+
+sugar_genus = physeqG %>%
+  aggregate_taxa(level = "Genus") %>%
+  microViz::tax_sort(by="name") %>%
+  microbiome::transform(transform = "compositional") %>%
+  plot_composition(.,average_by = "sugar_cat") + 
+  guides(fill = guide_legend(ncol = 1)) + 
+  labs(x = "Added Sugar Tertile", y = "Relative abundance") +
+  scale_fill_manual("Genus", values = mycolors) +
+  scale_x_discrete(breaks=c("0","1","2"),labels=c("Low", "Intermediate", "High")) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18,color="black"),
+        legend.title = element_text(size=18,color="black",face="bold"), legend.text = element_text(size=18,color="black")) 
+```
+
+# Differential abundance of genera
+
+```{r}
+hei_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+                         input_metadata = data.frame(physeqGenus@sam_data),
+                         output = "HEI",
+                         min_abundance = 0.01,
+                         min_prevalence = 0,
+                         normalization = "NONE",
+                         transform = "NONE",
+                         analysis_method = "NEGBIN",
+                         fixed_effects = c("age","sex","race","platform","hei_cat2"),
+                         standardize = FALSE,
+                         reference = c("Sex,1","Minority,0","Platform,0"))
+
+
+hei_maslin2 = hei_maslin$results %>% 
+  filter(metadata=="hei_cat2") %>%
+  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
+  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
+  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
+  mutate(coef=round(coef,2),
+         stderr=round(stderr,2),
+         pval=round(pval,3),
+         qval=round(qval,3))
+
+fiber_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+                         input_metadata = data.frame(physeqGenus@sam_data),
+                         output = "Fiber",
+                         min_abundance = 0.01,
+                         min_prevalence = 0,
+                         normalization = "NONE",
+                         transform = "NONE",
+                         analysis_method = "NEGBIN",
+                         fixed_effects = c("age","sex","race","platform","fiber_cat2"),
+                         standardize = FALSE,
+                         reference = c("Sex,1","Minority,0","Platform,0"))
+
+fiber_maslin2 = fiber_maslin$results %>% 
+  filter(metadata=="fiber_cat2") %>%
+  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
+  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
+  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
+  mutate(coef=round(coef,2),
+         stderr=round(stderr,2),
+         pval=round(pval,3),
+         qval=round(qval,3))
+
+
+sugar_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+                         input_metadata = data.frame(physeqGenus@sam_data),
+                         output = "Sugar",
+                         min_abundance = 0.01,
+                         min_prevalence = 0,
+                         normalization = "NONE",
+                         transform = "NONE",
+                         analysis_method = "NEGBIN",
+                         fixed_effects = c("age","sex","race","platform","sugar_cat2"),
+                         standardize = FALSE,
+                         reference = c("Sex,1","Minority,0","Platform,0"))
+
+sugar_maslin2 = sugar_maslin$results %>% 
+  filter(metadata=="sugar_cat2") %>%
+  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
+  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
+  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
+  mutate(coef=round(coef,2),
+         stderr=round(stderr,2),
+         pval=round(pval,3),
+         qval=round(qval,3))
+
+hei_taxa = hei_maslin2 %>%
+  filter(qval<0.05) %>%
+  ggplot(aes(x=reorder(Genus,-coef,sum), y=coef, fill=Phylum)) +
+  scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
+  geom_bar(stat="identity", width=0.5,color="black") +
+  geom_errorbar(aes(ymin=coef-stderr, ymax=coef+stderr), width=.2,
+                 position=position_dodge(.9)) +
+  labs(x = "Genus", y = "Fold Change", title = "HEI Tertile") +
+  geom_hline(yintercept=0) +
+  scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C","#FDBF6F")) + 
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
+        plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+
+fiber_taxa = fiber_maslin2 %>%
+  filter(qval<0.05) %>%
+  ggplot(aes(x=reorder(Genus,-coef,sum), y=coef, fill=Phylum)) +
+  scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
+  geom_bar(stat="identity", width=0.5,color="black") +
+    geom_errorbar(aes(ymin=coef-stderr, ymax=coef+stderr), width=.2,
+                 position=position_dodge(.9)) +
+  labs(x = "Genus", y = "Fold Change", title = "Dietary Fiber Tertile") +
+  geom_hline(yintercept=0) +
+  scale_fill_manual("Phylum", values = c("#1F78B4","#33A02C")) +  
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
+        plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18))
+
+sugar_taxa = sugar_maslin2 %>%
+  filter(qval<0.05) %>%
+  ggplot(aes(x=reorder(Genus,-coef,sum), y=coef, fill=Phylum)) +
+  scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
+  geom_bar(stat="identity", width=0.5,color="black") +
+    geom_errorbar(aes(ymin=coef-stderr, ymax=coef+stderr), width=.2,
+                 position=position_dodge(.9)) +
+  labs(x = "Genus", y = "Fold Change", title = "Added Sugar Tertile") +
+  geom_hline(yintercept=0) +
+  scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C","#FB9A99","#FDBF6F")) +  
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
+        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
+        plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+```
