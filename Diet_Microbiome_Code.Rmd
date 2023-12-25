@@ -15,6 +15,8 @@ library(Maaslin2)
 library(microbiome)
 library(dada2)
 library(Biostrings)
+library(ggpubr)
+library(png)
 ```
 
 # Introduction
@@ -205,6 +207,16 @@ set.seed(123)
 adonis(data_otu_filt_rar~age+sex+race+platform+sugar_cat2,
        data=d, permutations=9999, method="bray")$aov.tab
 
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+hei_iqr,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+fiber,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+sugar,
+       data=d, permutations=9999, method="bray")$aov.tab
+
 hei_beta = plot_ordination(ps4, pcoa_bc, type="samples", color="hei_cat", shape = "hei_cat") + 
   geom_point(size = 4.5,) +
   stat_ellipse(aes(group = hei_cat), linetype = 2, size=1) +
@@ -390,21 +402,105 @@ sugar_genus = physeqG %>%
 
 ## Differential abundance of genera
 
+### Diet as continuous variable
 ```{r}
 hei_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
                          input_metadata = data.frame(physeqGenus@sam_data),
                          output = "HEI",
                          min_abundance = 0.01,
                          min_prevalence = 0,
-                         normalization = "NONE",
+                         normalization = "TMM",
+                         transform = "NONE",
+                         analysis_method = "NEGBIN",
+                         fixed_effects = c("age","sex","race","platform","hei_iqr"),
+                         standardize = FALSE,
+                         reference = c("sex,1","race,0","platform,0"))
+
+
+hei_maslin2 = hei_maslin$results %>% 
+  filter(metadata=="hei_iqr") %>%
+  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
+  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
+  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
+  mutate(fc = coef/log(2),
+         fc_ll = (coef-(1.96*stderr))/log(2),
+         fc_up = (coef+(1.96*stderr))/log(2),
+         coef=round(coef,2),
+         stderr=round(stderr,2),
+         pval=round(pval,3),
+         qval=round(qval,3)) %>%
+  arrange(Genus)
+
+fiber_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+                         input_metadata = data.frame(physeqGenus@sam_data),
+                         output = "Fiber",
+                         min_abundance = 0.01,
+                         min_prevalence = 0,
+                         normalization = "TMM",
+                         transform = "NONE",
+                         analysis_method = "NEGBIN",
+                         fixed_effects = c("age","sex","race","platform","fiber"),
+                         standardize = FALSE,
+                         reference = c("sex,1","race,0","platform,0"))
+
+fiber_maslin2 = fiber_maslin$results %>% 
+  filter(metadata=="fiber") %>%
+  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
+  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
+  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
+  mutate(fc = coef/log(2),
+         fc_ll = (coef-(1.96*stderr))/log(2),
+         fc_up = (coef+(1.96*stderr))/log(2),
+         coef=round(coef,2),
+         stderr=round(stderr,2),
+         pval=round(pval,3),
+         qval=round(qval,3)) %>%
+  arrange(Genus)
+
+
+sugar_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+                         input_metadata = data.frame(physeqGenus@sam_data),
+                         output = "Sugar",
+                         min_abundance = 0.01,
+                         min_prevalence = 0,
+                         normalization = "TMM",
+                         transform = "NONE",
+                         analysis_method = "NEGBIN",
+                         fixed_effects = c("age","sex","race","platform","sugar"),
+                         standardize = FALSE,
+                         reference = c("sex,1","race,0","platform,0"))
+
+sugar_maslin2 = sugar_maslin$results %>% 
+  filter(metadata=="sugar") %>%
+  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
+  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
+  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
+  mutate(fc = coef/log(2),
+         fc_ll = (coef-(1.96*stderr))/log(2),
+         fc_up = (coef+(1.96*stderr))/log(2),
+         coef=round(coef,2),
+         stderr=round(stderr,2),
+         pval=round(pval,3),
+         qval=round(qval,3)) %>%
+  arrange(Genus)
+```
+
+### Diet as categorical variable for trend test
+```{r}
+hei_maslin3 <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+                         input_metadata = data.frame(physeqGenus@sam_data),
+                         output = "HEI",
+                         min_abundance = 0.01,
+                         min_prevalence = 0,
+                         normalization = "TMM",
                          transform = "NONE",
                          analysis_method = "NEGBIN",
                          fixed_effects = c("age","sex","race","platform","hei_cat2"),
                          standardize = FALSE,
-                         reference = c("Sex,1","Minority,0","Platform,0"))
+                         reference = c("sex,1","race,0","platform,0"))
 
 
-hei_maslin2 = hei_maslin$results %>% 
+hei_maslin4 = hei_maslin3$results %>% 
   filter(metadata=="hei_cat2") %>%
   mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
   merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
@@ -415,21 +511,23 @@ hei_maslin2 = hei_maslin$results %>%
          coef=round(coef,2),
          stderr=round(stderr,2),
          pval=round(pval,3),
-         qval=round(qval,3))
+         qval=round(qval,3)) %>%
+  arrange(Genus)
+  
 
-fiber_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+fiber_maslin3 <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
                          input_metadata = data.frame(physeqGenus@sam_data),
                          output = "Fiber",
                          min_abundance = 0.01,
                          min_prevalence = 0,
-                         normalization = "NONE",
+                         normalization = "TMM",
                          transform = "NONE",
                          analysis_method = "NEGBIN",
                          fixed_effects = c("age","sex","race","platform","fiber_cat2"),
                          standardize = FALSE,
-                         reference = c("Sex,1","Minority,0","Platform,0"))
+                         reference = c("sex,1","race,0","platform,0"))
 
-fiber_maslin2 = fiber_maslin$results %>% 
+fiber_maslin4 = fiber_maslin3$results %>% 
   filter(metadata=="fiber_cat2") %>%
   mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
   merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
@@ -440,22 +538,23 @@ fiber_maslin2 = fiber_maslin$results %>%
          coef=round(coef,2),
          stderr=round(stderr,2),
          pval=round(pval,3),
-         qval=round(qval,3))
+         qval=round(qval,3)) %>%
+  arrange(Genus)
 
 
-sugar_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
+sugar_maslin3 <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
                          input_metadata = data.frame(physeqGenus@sam_data),
                          output = "Sugar",
                          min_abundance = 0.01,
                          min_prevalence = 0,
-                         normalization = "NONE",
+                         normalization = "TMM",
                          transform = "NONE",
                          analysis_method = "NEGBIN",
                          fixed_effects = c("age","sex","race","platform","sugar_cat2"),
                          standardize = FALSE,
-                         reference = c("Sex,1","Minority,0","Platform,0"))
+                         reference = c("sex,1","race,0","platform,0"))
 
-sugar_maslin2 = sugar_maslin$results %>% 
+sugar_maslin4 = sugar_maslin3$results %>% 
   filter(metadata=="sugar_cat2") %>%
   mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
   merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
@@ -466,10 +565,12 @@ sugar_maslin2 = sugar_maslin$results %>%
          coef=round(coef,2),
          stderr=round(stderr,2),
          pval=round(pval,3),
-         qval=round(qval,3))
+         qval=round(qval,3)) %>%
+  arrange(Genus)
 
-hei_taxa = hei_maslin2 %>%
-  filter(qval<0.05) %>%
+
+hei_taxa = data.frame(cbind(hei_maslin4,hei_maslin2%>%select(coef:fc_up))) %>%
+  filter(qval<0.05&qval.1<0.05) %>%
   ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
   scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
   geom_bar(stat="identity", width=0.5,color="black") +
@@ -477,15 +578,15 @@ hei_taxa = hei_maslin2 %>%
                  position=position_dodge(.9)) +
   labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "HEI Tertile") +
   geom_hline(yintercept=0) +
-  scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C","#FDBF6F")) + 
+  scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C")) + 
   theme_bw() +
   theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
         axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
         axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
         plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
 
-fiber_taxa = fiber_maslin2 %>%
-  filter(qval<0.05) %>%
+fiber_taxa = data.frame(cbind(fiber_maslin4,fiber_maslin2%>%select(coef:fc_up))) %>%
+  filter(qval<0.05&qval.1<0.05) %>%
   ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
   scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
   geom_bar(stat="identity", width=0.5,color="black") +
@@ -493,15 +594,15 @@ fiber_taxa = fiber_maslin2 %>%
                  position=position_dodge(.9)) +
   labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "Dietary Fiber Tertile") +
   geom_hline(yintercept=0) +
-  scale_fill_manual("Phylum", values = c("#1F78B4","#33A02C")) +  
+  scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C")) +  
   theme_bw() +
   theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
         axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
         axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
         plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18))
 
-sugar_taxa = sugar_maslin2 %>%
-  filter(qval<0.05) %>%
+sugar_taxa = data.frame(cbind(sugar_maslin4,sugar_maslin2%>%select(coef:fc_up))) %>%
+  filter(qval<0.05&qval.1<0.05) %>%
   ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
   scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
   geom_bar(stat="identity", width=0.5,color="black") +
@@ -509,10 +610,43 @@ sugar_taxa = sugar_maslin2 %>%
                  position=position_dodge(.9)) +
   labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "Added Sugar Tertile") +
   geom_hline(yintercept=0) +
-  scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C","#FB9A99","#FDBF6F")) +  
+  scale_fill_manual("Phylum", values = c("#33A02C","#FB9A99")) +  
   theme_bw() +
   theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
         axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
         axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
         plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+```
+
+### Final figure
+```{r,message=FALSE}
+png("hei.png", width = 450, height = 630, units='mm', res = 400)
+ggarrange(ggarrange(hei_beta,hei_alpha, nrow=1,labels = c("a", "b"), 
+                    widths = c(2.2,1.7),font.label=list(color="black",size=25)),
+          ggarrange(hei_phylum,hei_genus, nrow=1,labels = c("c", "d"), 
+                    widths = c(2.3, 2.8),font.label=list(color="black",size=25)),
+          ggarrange(hei_taxa, nrow=1,labels="e", 
+                    widths = 3,font.label=list(color="black",size=25)),
+          nrow=3, heights = c(0.6,1.3,1))
+dev.off()
+
+png("fiber.png", width = 450, height = 630, units='mm', res = 400)
+ggarrange(ggarrange(fiber_beta,fiber_alpha, nrow=1,labels = c("a", "b"), 
+                    widths = c(2.2,1.7),font.label=list(color="black",size=25)),
+          ggarrange(fiber_phylum,fiber_genus, nrow=1,labels = c("c", "d"), 
+                    widths = c(2.3, 2.8),font.label=list(color="black",size=25)),
+          ggarrange(fiber_taxa,nrow=1,labels="e",
+                    widths = 3,font.label=list(color="black",size=25)),
+          nrow=3, heights = c(0.6,1.3,1))
+dev.off()
+
+png("sugar.png", width = 450, height = 630, units='mm', res = 400)
+ggarrange(ggarrange(sugar_beta,sugar_alpha, nrow=1,labels = c("a", "b"), 
+                    widths = c(2.2,1.7),heights = 0.6,font.label=list(color="black",size=25)),
+          ggarrange(sugar_phylum,sugar_genus, nrow=1,labels = c("c", "d"), 
+                    widths = c(2.3, 2.8),heights = 1,font.label=list(color="black",size=25)),
+          ggarrange(sugar_taxa,nrow=1,labels="e",
+                    widths = 3,heights = 0.9,font.label=list(color="black",size=25)),
+          nrow=3, heights = c(0.6,1.3,1))
+dev.off()
 ```
