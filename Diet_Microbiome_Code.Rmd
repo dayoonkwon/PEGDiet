@@ -109,6 +109,140 @@ taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
 ps
 ```
 
+# Setting up R environment for statistical analyses
+
+## Create needed functions for analyses
+
+```{r}
+#prune_by_group function
+prune_by_group <- function(phy, group, P = 0.5){
+  
+  grs <- sample_data(phy)[, group][[1]]
+  grsu <- unique(grs)
+  
+  these <- list()
+  for(i in seq_along(grsu)){
+    subotu <- t(otu_table(phy,taxa_are_rows=FALSE))[, grs == grsu[i]]
+    subcount <- apply(subotu, 1, function(x) sum(x > 0))
+    these[[i]] <- names(subcount[subcount >= ceiling(sum(grs == grsu[i])*P)])
+  }
+  
+  this <- unique(do.call(c, these))
+  phynew <- prune_taxa(this, phy)
+  return(phynew)
+}
+
+#alpha diversity function
+alpha_func=function(x,y,z) {
+  c(paste(round(x[2,1],2), " (",round(x[2,1]-1.96*x[2,2],2),", ",round(x[2,1]+1.96*x[2,2],2),")",sep=""),
+    paste(round(x[3,1],2), " (",round(x[3,1]-1.96*x[3,2],2),", ",round(x[3,1]+1.96*x[3,2],2),")",sep=""),
+    round(y[2,4],3),
+    paste(round(z[2,1],2), " (",round(z[2,1]-1.96*z[2,2],2),", ",round(z[2,1]+1.96*z[2,2],2),")",sep=""),
+    round(z[2,4],3))
+}
+
+#differential abundance function
+MaAsLin2.plus = function(ps, output, 
+                          fixed_effects=NULL, 
+                          reference=NULL){
+  
+  input_data = data.frame(otu_table(ps))
+  input_metadata = data.frame(sample_data(ps))
+  taxadata = data.frame(tax_table(ps))
+  taxadata$feature = rownames(taxadata)
+  exposure = fixed_effects[5]
+  
+  fits = Maaslin2(input_data,
+                   input_metadata,
+                   output=output,
+                   min_abundance=0.01,
+                   min_prevalence=0,
+                   normalization='TMM',
+                   transform='NONE',
+                   analysis_method='NEGBIN',
+                   fixed_effects=fixed_effects,
+                   standardize=FALSE,
+                   plot_heatmap=FALSE,
+                   plot_scatter=FALSE,
+                   heatmap_first_n=50,
+                   reference=reference)
+  
+  res = fits$results %>%
+    filter(metadata==exposure) %>%
+    merge(., taxadata, by="feature") %>%
+    select(-feature,-metadata,-value,-name,-N,-N.not.zero) %>%
+    mutate(qval=p.adjust(as.numeric(as.character(pval)), method="fdr"),
+           fc = coef/log(2),
+           fc_ll = (coef-(1.96*stderr))/log(2),
+           fc_up = (coef+(1.96*stderr))/log(2)) 
+
+  return(res)
+}
+```
+
+# Filtering
+
+```{r}
+any(taxa_sums(ps) == 0)
+ps1 <- prune_taxa(taxa_sums(ps) > 0, ps)
+ntaxa(ps)
+ntaxa(ps1)
+
+#Rarefy for Alpha diversirt and Presence/Absence beta diversity
+rarecurve(t(otu_table(ps)), step=50, cex=0.5)
+ps.rarefied = rarefy_even_depth(ps, rngseed=1, sample.size=0.9*min(sample_sums(ps)), replace=F)
+
+#Whole phylum filtering
+#Remove of the feature with ambiguous phylum annotation.
+ps2 <- subset_taxa(ps1, !is.na(Phylum) & !Phylum %in% c("", "uncharacterized"))
+ps2
+
+#Generate a prevalence table (number of samples each taxa occurs in) for each taxa.
+prevdf = apply(X = otu_table(ps2),
+               MARGIN = 2,
+               FUN = function(x){sum(x > 0)})
+
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(ps2),
+                    tax_table(ps2))
+
+#Investigate low prevalence/abundance phylum and subset them out.
+phylum_prev<-plyr::ddply(prevdf, "Phylum", function(df1){
+  data.frame(mean_prevalence=mean(df1$Prevalence),total_abundance=sum(df1$TotalAbundance,na.rm = T),stringsAsFactors = F)
+})
+phylum_prev<-phylum_prev[order(-phylum_prev$total_abundance),]
+phylum_prev
+
+#Using the table above, determine the genera to filter
+#Low abundance phyla (<50)
+phyla2Filter = subset(phylum_prev,total_abundance<50)$Phylum
+
+ps3 = subset_taxa(ps2, !Phylum %in% phyla2Filter)
+ps3
+
+
+#Individual Taxa Filtering
+#Subset to the remaining phyla by prevalence.
+prevdf1 = subset(prevdf, Phylum %in% get_taxa_unique(ps3, taxonomic.rank = "Phylum"))
+p_revdf <- ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(ps3),color=Phylum)) +
+  # Include a guess for parameter
+  geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) + geom_point(size = 2, alpha = 0.7) +
+  scale_x_log10() +  xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") +
+  facet_wrap(~Phylum) + theme(legend.position="none")
+
+
+# Define prevalence threshold as 20% of total samples
+prevalenceThreshold = 0.20 * nsamples(ps3)
+prevalenceThreshold
+# Execute prevalence filter, using `prune_taxa()` function
+keepTaxa = rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
+ps4 = prune_taxa(keepTaxa, ps3)
+ps4
+summary(rowSums(otu_table(ps4)))
+sum(rowSums(otu_table(ps4)))
+sd(rowSums(otu_table(ps4)))
+```
+
 # Statistical analyses
 
 ## Alpha diversity analysis
@@ -119,20 +253,17 @@ alphadiv <- cbind(ps4@sam_data, shannon)
 
 x1=summary(lm(shannon~hei_cat+age+sex+race+platform,data=alphadiv))$coefficients
 x1.1=summary(lm(shannon~hei_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+x1.2=summary(lm(shannon~hei_iqr+age+sex+race+platform,data=alphadiv))$coefficients
 
 x2=summary(lm(shannon~fiber_cat+age+sex+race+platform,data=alphadiv))$coefficients
 x2.1=summary(lm(shannon~fiber_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+x2.2=summary(lm(shannon~fiber+age+sex+race+platform,data=alphadiv))$coefficients
 
 x3=summary(lm(shannon~sugar_cat+age+sex+race+platform,data=alphadiv))$coefficients
 x3.1=summary(lm(shannon~sugar_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+x3.2=summary(lm(shannon~sugar+age+sex+race+platform,data=alphadiv))$coefficients
 
-alpha_func=function(x,y) {
-  c(paste(round(x[2,1],2), " (",round(x[2,1]-1.96*x[2,2],2),", ",round(x[2,1]+1.96*x[2,2],2),")",sep=""),
-    paste(round(x[3,1],2), " (",round(x[3,1]-1.96*x[3,2],2),", ",round(x[3,1]+1.96*x[3,2],2),")",sep=""),
-    round(y[2,4],3))
-}
-
-table1=rbind(alpha_func(x1,x1.1),alpha_func(x2,x2.1),alpha_func(x3,x3.1))
+table1=rbind(alpha_func(x1,x1.1,x1.2),alpha_func(x2,x2.1,x2.2),alpha_func(x3,x3.1,x3.2))
 
 hei_alpha = alphadiv %>%
   ggplot(.,aes(x = hei_cat, y = shannon, fill = hei_cat)) +
@@ -177,7 +308,7 @@ sugar_alpha = ggplot(alphadiv,aes(x = sugar_cat, y = shannon, fill = sugar_cat))
 
 ## Principal Component Analysis
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, message=FALSE}
 data_otu_filt_rar = data.frame(otu_table(ps4)) # create a separated file
 dist_bc = as.matrix(vegdist(data_otu_filt_rar, method = "bray")) 
 
@@ -403,217 +534,273 @@ sugar_genus = physeqG %>%
 ## Differential abundance of genera
 
 ### Diet as continuous variable
-```{r}
-hei_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
-                         input_metadata = data.frame(physeqGenus@sam_data),
-                         output = "HEI",
-                         min_abundance = 0.01,
-                         min_prevalence = 0,
-                         normalization = "TMM",
-                         transform = "NONE",
-                         analysis_method = "NEGBIN",
-                         fixed_effects = c("age","sex","race","platform","hei_iqr"),
-                         standardize = FALSE,
-                         reference = c("sex,1","race,0","platform,0"))
+```{r, warning=FALSE, message=FALSE}
+hei_maslin = MaAsLin2.plus(ps = physeqGenus,
+                            output="HEI",
+                            fixed_effects = c("age","sex","race","platform","hei_iqr"),
+                            reference = c("sex,1","race,0","platform,0"))
 
+fiber_maslin = MaAsLin2.plus(ps = physeqGenus,
+                            output="Fiber",
+                            fixed_effects = c("age","sex","race","platform","fiber"),
+                            reference = c("sex,1","race,0","platform,0"))
 
-hei_maslin2 = hei_maslin$results %>% 
-  filter(metadata=="hei_iqr") %>%
-  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
-  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
-  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(fc = coef/log(2),
-         fc_ll = (coef-(1.96*stderr))/log(2),
-         fc_up = (coef+(1.96*stderr))/log(2),
-         coef=round(coef,2),
-         stderr=round(stderr,2),
-         pval=round(pval,3),
-         qval=round(qval,3)) %>%
-  arrange(Genus)
-
-fiber_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
-                         input_metadata = data.frame(physeqGenus@sam_data),
-                         output = "Fiber",
-                         min_abundance = 0.01,
-                         min_prevalence = 0,
-                         normalization = "TMM",
-                         transform = "NONE",
-                         analysis_method = "NEGBIN",
-                         fixed_effects = c("age","sex","race","platform","fiber"),
-                         standardize = FALSE,
-                         reference = c("sex,1","race,0","platform,0"))
-
-fiber_maslin2 = fiber_maslin$results %>% 
-  filter(metadata=="fiber") %>%
-  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
-  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
-  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(fc = coef/log(2),
-         fc_ll = (coef-(1.96*stderr))/log(2),
-         fc_up = (coef+(1.96*stderr))/log(2),
-         coef=round(coef,2),
-         stderr=round(stderr,2),
-         pval=round(pval,3),
-         qval=round(qval,3)) %>%
-  arrange(Genus)
-
-
-sugar_maslin <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
-                         input_metadata = data.frame(physeqGenus@sam_data),
-                         output = "Sugar",
-                         min_abundance = 0.01,
-                         min_prevalence = 0,
-                         normalization = "TMM",
-                         transform = "NONE",
-                         analysis_method = "NEGBIN",
-                         fixed_effects = c("age","sex","race","platform","sugar"),
-                         standardize = FALSE,
-                         reference = c("sex,1","race,0","platform,0"))
-
-sugar_maslin2 = sugar_maslin$results %>% 
-  filter(metadata=="sugar") %>%
-  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
-  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
-  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(fc = coef/log(2),
-         fc_ll = (coef-(1.96*stderr))/log(2),
-         fc_up = (coef+(1.96*stderr))/log(2),
-         coef=round(coef,2),
-         stderr=round(stderr,2),
-         pval=round(pval,3),
-         qval=round(qval,3)) %>%
-  arrange(Genus)
+sugar_maslin = MaAsLin2.plus(ps = physeqGenus,
+                            output="Sugar",
+                            fixed_effects = c("age","sex","race","platform","sugar"),
+                            reference = c("sex,1","race,0","platform,0"))
 ```
 
 ### Diet as categorical variable for trend test
-```{r}
-hei_maslin3 <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
-                         input_metadata = data.frame(physeqGenus@sam_data),
-                         output = "HEI",
-                         min_abundance = 0.01,
-                         min_prevalence = 0,
-                         normalization = "TMM",
-                         transform = "NONE",
-                         analysis_method = "NEGBIN",
-                         fixed_effects = c("age","sex","race","platform","hei_cat2"),
-                         standardize = FALSE,
-                         reference = c("sex,1","race,0","platform,0"))
+```{r, warning=FALSE, message=FALSE}
+hei_maslin2 = MaAsLin2.plus(ps = physeqGenus,
+                            output="HEI",
+                            fixed_effects = c("age","sex","race","platform","hei_cat2"),
+                            reference = c("sex,1","race,0","platform,0"))
+
+fiber_maslin2 = MaAsLin2.plus(ps = physeqGenus,
+                            output="Fiber",
+                            fixed_effects = c("age","sex","race","platform","fiber_cat2"),
+                            reference = c("sex,1","race,0","platform,0"))
 
 
-hei_maslin4 = hei_maslin3$results %>% 
-  filter(metadata=="hei_cat2") %>%
-  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
-  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
-  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(fc = coef/log(2),
-         fc_ll = (coef-(1.96*stderr))/log(2),
-         fc_up = (coef+(1.96*stderr))/log(2),
-         coef=round(coef,2),
-         stderr=round(stderr,2),
-         pval=round(pval,3),
-         qval=round(qval,3)) %>%
-  arrange(Genus)
-  
-
-fiber_maslin3 <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
-                         input_metadata = data.frame(physeqGenus@sam_data),
-                         output = "Fiber",
-                         min_abundance = 0.01,
-                         min_prevalence = 0,
-                         normalization = "TMM",
-                         transform = "NONE",
-                         analysis_method = "NEGBIN",
-                         fixed_effects = c("age","sex","race","platform","fiber_cat2"),
-                         standardize = FALSE,
-                         reference = c("sex,1","race,0","platform,0"))
-
-fiber_maslin4 = fiber_maslin3$results %>% 
-  filter(metadata=="fiber_cat2") %>%
-  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
-  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
-  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(fc = coef/log(2),
-         fc_ll = (coef-(1.96*stderr))/log(2),
-         fc_up = (coef+(1.96*stderr))/log(2),
-         coef=round(coef,2),
-         stderr=round(stderr,2),
-         pval=round(pval,3),
-         qval=round(qval,3)) %>%
-  arrange(Genus)
+sugar_maslin2 = MaAsLin2.plus(ps = physeqGenus,
+                            output="Sugar",
+                            fixed_effects = c("age","sex","race","platform","sugar_cat2"),
+                            reference = c("sex,1","race,0","platform,0"))
 
 
-sugar_maslin3 <- Maaslin2(input_data = data.frame(physeqGenus@otu_table),
-                         input_metadata = data.frame(physeqGenus@sam_data),
-                         output = "Sugar",
-                         min_abundance = 0.01,
-                         min_prevalence = 0,
-                         normalization = "TMM",
-                         transform = "NONE",
-                         analysis_method = "NEGBIN",
-                         fixed_effects = c("age","sex","race","platform","sugar_cat2"),
-                         standardize = FALSE,
-                         reference = c("sex,1","race,0","platform,0"))
-
-sugar_maslin4 = sugar_maslin3$results %>% 
-  filter(metadata=="sugar_cat2") %>%
-  mutate(qval = p.adjust(as.numeric(as.character(pval)), method="fdr")) %>%
-  merge(., data.frame(physeqGenus@tax_table) %>% mutate(feature = rownames(.)), by="feature") %>%
-  select(Kingdom:Genus,coef,stderr,pval,qval) %>%
-  mutate(fc = coef/log(2),
-         fc_ll = (coef-(1.96*stderr))/log(2),
-         fc_up = (coef+(1.96*stderr))/log(2),
-         coef=round(coef,2),
-         stderr=round(stderr,2),
-         pval=round(pval,3),
-         qval=round(qval,3)) %>%
-  arrange(Genus)
+hei_taxadata = data.frame(cbind(hei_maslin2%>%select(Kingdom:Genus,coef:qval,fc:fc_up),
+                                hei_maslin%>%select(coef:qval,fc:fc_up)))
+fiber_taxadata = data.frame(cbind(fiber_maslin2%>%select(Kingdom:Genus,coef:qval,fc:fc_up),
+                                  fiber_maslin%>%select(coef:qval,fc:fc_up)))
+sugar_taxadata = data.frame(cbind(sugar_maslin2%>%select(Kingdom:Genus,coef:qval,fc:fc_up),
+                                  sugar_maslin%>%select(coef:qval,fc:fc_up)))
 
 
-hei_taxa = data.frame(cbind(hei_maslin4,hei_maslin2%>%select(coef:fc_up))) %>%
+hei_taxa = hei_taxadata %>%
   filter(qval<0.05&qval.1<0.05) %>%
-  ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
-  scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
+  mutate(Genus=ifelse(Genus=="UC5-1-2E3","UC5-1-2E3 (Lachnospiraceae family genus)",Genus)) %>%
+  ggplot(aes(y=reorder(Genus,-fc,sum), x=fc, fill=Phylum)) +
+  scale_y_discrete(limits = rev,labels=function(x) stringr::str_wrap(gsub("_", " ", x, fixed=TRUE), width = 30))+
   geom_bar(stat="identity", width=0.5,color="black") +
-  geom_errorbar(aes(ymin=fc_ll, ymax=fc_up), width=.2,
-                 position=position_dodge(.9)) +
-  labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "HEI Tertile") +
-  geom_hline(yintercept=0) +
+  geom_errorbar(aes(xmin=fc_ll, xmax=fc_up), width=.2,position=position_dodge(.9)) +
+  labs(y = "Genus", x = expression(bold(Log[2]~"Fold Change")), title = "HEI Tertile") +
+  geom_vline(xintercept=0) +
+  xlim(c(-5,5)) +
   scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C")) + 
   theme_bw() +
   theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
-        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
-        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
-        plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+        axis.title.x=element_text(size=20,face="bold"),axis.text.x=element_text(size=18, hjust=0),
+        axis.title.y=element_text(size=20,face="bold"),axis.text.y=element_text(size=18),plot.title = element_text(size=20,face="bold"),
+        legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
 
-fiber_taxa = data.frame(cbind(fiber_maslin4,fiber_maslin2%>%select(coef:fc_up))) %>%
+fiber_taxa = fiber_taxadata %>%
   filter(qval<0.05&qval.1<0.05) %>%
-  ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
-  scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
+  mutate(Genus=ifelse(Genus=="UC5-1-2E3","UC5-1-2E3 (Lachnospiraceae family genus)",Genus)) %>%
+  ggplot(aes(y=reorder(Genus,-fc,sum), x=fc, fill=Phylum)) +
+  scale_y_discrete(limits = rev,labels=function(x) stringr::str_wrap(gsub("_", " ", x, fixed=TRUE), width = 30))+
   geom_bar(stat="identity", width=0.5,color="black") +
-    geom_errorbar(aes(ymin=fc_ll, ymax=fc_up), width=.2,
-                 position=position_dodge(.9)) +
-  labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "Dietary Fiber Tertile") +
-  geom_hline(yintercept=0) +
+  geom_errorbar(aes(xmin=fc_ll, xmax=fc_up), width=.2,position=position_dodge(.9)) +
+  labs(y = "Genus", x = expression(bold(Log[2]~"Fold Change")), title = "Dietary Fiber Tertile") +
+  geom_vline(xintercept=0) +
+  ylim(c(-4,4)) +
   scale_fill_manual("Phylum", values = c("#A6CEE3","#1F78B4","#33A02C")) +  
   theme_bw() +
   theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
-        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
-        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
-        plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18))
+        axis.title.x=element_text(size=20,face="bold"),axis.text.x=element_text(size=18, hjust=0),
+        axis.title.y=element_text(size=20,face="bold"),axis.text.y=element_text(size=18),plot.title = element_text(size=20,face="bold"),
+        legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
 
-sugar_taxa = data.frame(cbind(sugar_maslin4,sugar_maslin2%>%select(coef:fc_up))) %>%
+sugar_taxa = sugar_taxadata %>%
   filter(qval<0.05&qval.1<0.05) %>%
-  ggplot(aes(x=reorder(Genus,-fc,sum), y=fc, fill=Phylum)) +
-  scale_x_discrete(limits = rev,labels=function(x) gsub("_", " ", x, fixed=TRUE))+
+  ggplot(aes(y=reorder(Genus,-fc,sum), x=fc, fill=Phylum)) +
+  scale_y_discrete(limits = rev,labels=function(x) stringr::str_wrap(gsub("_", " ", x, fixed=TRUE), width = 30))+
   geom_bar(stat="identity", width=0.5,color="black") +
-    geom_errorbar(aes(ymin=fc_ll, ymax=fc_up), width=.2,
-                 position=position_dodge(.9)) +
-  labs(x = "Genus", y = expression(bold(Log[2]~"Fold Change")), title = "Added Sugar Tertile") +
-  geom_hline(yintercept=0) +
+  geom_errorbar(aes(xmin=fc_ll, xmax=fc_up), width=.2,position=position_dodge(.9)) +
+  labs(y = "Genus", x = expression(bold(Log[2]~"Fold Change")), title = "Added Sugar Tertile") +
+  geom_vline(xintercept=0) +
   scale_fill_manual("Phylum", values = c("#33A02C","#FB9A99")) +  
   theme_bw() +
   theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
-        axis.title.x=element_text(size=20,face="bold"),axis.title.y=element_text(size=20,face="bold"),
-        axis.text.x=element_text(size=18,angle = -45, hjust=0),axis.text.y=element_text(size=18),
-        plot.title = element_text(size=20,face="bold"),legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+        axis.title.x=element_text(size=20,face="bold"),axis.text.x=element_text(size=18, hjust=0),
+        axis.title.y=element_text(size=20,face="bold"),axis.text.y=element_text(size=18),plot.title = element_text(size=20,face="bold"),
+        legend.title = element_text(size=18,face="bold"), legend.text = element_text(size=18)) 
+```
+
+# Functional pathway analyses
+
+## Filtering
+
+```{r}
+#Filter
+any(taxa_sums(py) == 0)
+py1 <- prune_taxa(taxa_sums(py) > 0, py)
+ntaxa(py)
+ntaxa(py1)
+
+#Generate a prevalence table (number of samples each taxa occurs in) for each taxa.
+prevdf = apply(X = otu_table(py1),
+               MARGIN = 2,
+               FUN = function(x){sum(x > 0)})
+
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(py1),
+                    tax_table(py1))
+
+prevdf$pathway = rownames(prevdf)
+pathway2Filter = prevdf$pathway[prevdf$TotalAbundance<100]
+
+py3 = subset_taxa(py1, !rownames(tax_table(py1)) %in% pathway2Filter)
+py3
+
+prevalenceThreshold = 0.20 * nsamples(py3)
+prevalenceThreshold
+
+# Execute prevalence filter, using `prune_taxa()` function
+prevdf1 = subset(prevdf, ta1 %in% get_taxa_unique(py3, taxonomic.rank = "ta1"))
+
+keepTaxa = rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
+py4 = prune_taxa(keepTaxa, py3)
+py4
+```
+
+## Alpha diversity analysis
+
+```{r}
+shannon <- vegan::diversity(py4@otu_table, index = "shannon")
+alphadiv <- cbind(py4@sam_data, shannon)
+
+x1=summary(lm(shannon~hei_cat+age+sex+race+platform,data=alphadiv))$coefficients
+x1.1=summary(lm(shannon~hei_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+x1.2=summary(lm(shannon~hei_iqr+age+sex+race+platform,data=alphadiv))$coefficients
+
+x2=summary(lm(shannon~fiber_cat+age+sex+race+platform,data=alphadiv))$coefficients
+x2.1=summary(lm(shannon~fiber_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+x2.2=summary(lm(shannon~fiber+age+sex+race+platform,data=alphadiv))$coefficients
+
+x3=summary(lm(shannon~sugar_cat+age+sex+race+platform,data=alphadiv))$coefficients
+x3.1=summary(lm(shannon~sugar_cat2+age+sex+race+platform,data=alphadiv))$coefficients
+x3.2=summary(lm(shannon~sugar+age+sex+race+platform,data=alphadiv))$coefficients
+
+table2=rbind(alpha_func(x1,x1.1,x1.2),alpha_func(x2,x2.1,x2.2),alpha_func(x3,x3.1,x3.2))
+```
+
+## Principal Component Analysis
+
+```{r, warning=FALSE, message=FALSE}
+data_otu_filt_rar = data.frame(otu_table(py4)) # create a separated file
+dist_bc = as.matrix(vegdist(data_otu_filt_rar, method = "bray")) 
+
+# a peek at the first five rows / columns
+dist_bc[1:5, 1:5]
+
+# calculate PCOA using Phyloseq package
+pcoa_bc = ordinate(py4, "PCoA", "bray") 
+mds_dat<-data.frame(pcoa_bc$vectors)
+mds_dat$PEGID=row.names(mds_dat)
+mds2<-merge(mds_dat,data.frame(py4@sam_data),by="PEGID")
+
+mody <- capscale(pcoa_bc$vectors~ 1)
+eig=eigenvals(mody)
+head(eig / sum(eig))
+
+clr1 =head(eig / sum(eig))[1]
+clr2 =head(eig / sum(eig))[2]
+
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+hei_cat2,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+fiber_cat2,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+sugar_cat2,
+       data=d, permutations=9999, method="bray")$aov.tab
+
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+hei_iqr,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+fiber,
+       data=d, permutations=9999, method="bray")$aov.tab
+set.seed(123)
+adonis(data_otu_filt_rar~age+sex+race+platform+sugar,
+       data=d, permutations=9999, method="bray")$aov.tab
+```
+
+## Differential abundance of pathways
+
+### Diet as continuous variable
+```{r, warning=FALSE, message=FALSE}
+hei_maslin3 = MaAsLin2.plus(ps = py4,
+                            output="HEI",
+                            fixed_effects = c("age","sex","race","platform","hei_iqr"),
+                            reference = c("sex,1","race,0","platform,0"))
+
+fiber_maslin3 = MaAsLin2.plus(ps = py4,
+                            output="Fiber",
+                            fixed_effects = c("age","sex","race","platform","fiber"),
+                            reference = c("sex,1","race,0","platform,0"))
+```
+
+### Diet as categorical variable for trend test
+```{r, warning=FALSE, message=FALSE}
+hei_maslin4 = MaAsLin2.plus(ps = py4,
+                            output="HEI",
+                            fixed_effects = c("age","sex","race","platform","hei_cat2"),
+                            reference = c("sex,1","race,0","platform,0"))
+
+fiber_maslin4 = MaAsLin2.plus(ps = py4,
+                            output="Fiber",
+                            fixed_effects = c("age","sex","race","platform","fiber_cat2"),
+                            reference = c("sex,1","race,0","platform,0"))
+
+
+hei_pathdata = data.frame(cbind(hei_maslin4%>%select(ta1:ta2,coef:qval,fc:fc_up),
+                                hei_maslin3%>%select(coef:qval,fc:fc_up)))
+fiber_pathdata = data.frame(cbind(fiber_maslin4%>%select(ta1:ta2,coef:qval,fc:fc_up),
+                                  fiber_maslin3%>%select(coef:qval,fc:fc_up)))
+
+hei_path = hei_pathdata %>%
+  filter(qval<0.05&qval.1<0.05) %>%
+  mutate(ta2 = Hmisc::capitalize(ta2),
+         Superclass = factor(c("Degradation/Utilization/Assimilation","Degradation/Utilization/Assimilation","Biosynthesis","Biosynthesis"),
+                             levels = c("Biosynthesis","Degradation/Utilization/Assimilation"))) %>%
+  ggplot(aes(y=reorder(ta2,-fc,sum), x=fc, fill=Superclass)) +
+  scale_y_discrete(limits = rev, labels = function(x) stringr::str_wrap(x, width = 35))+
+  geom_bar(stat="identity", width=0.5,color="black") +
+  geom_errorbar(aes(xmin=fc_ll, xmax=fc_up), width=.2,
+                 position=position_dodge(.9)) +
+  labs(y = "MetaCyc Pathway", x = expression(bold(Log[2]~"Fold Change")), title = "HEI Tertile") +
+  geom_vline(xintercept=0) +
+  scale_fill_manual("Superclass Function",values = c("#BC80BD","#FB9A99")) + 
+  xlim(c(-2,2)) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.text.x=element_text(size=18, hjust=1),
+        axis.title.y=element_text(size=20,face="bold"),axis.text.y=element_text(size=18),
+        legend.title = element_text(size=18,face="bold"),legend.text = element_text(size=18),
+        plot.title = element_text(size=20,face="bold")) 
+
+fiber_path = data.frame(fiber_pathdata) %>%
+  filter(qval<0.05&qval.1<0.05) %>%
+  mutate(ta2 = Hmisc::capitalize(ta2),
+         Superclass = factor(c("Degradation/Utilization/Assimilation","Biosynthesis","Biosynthesis","Biosynthesis"),
+                             levels = c("Biosynthesis","Degradation/Utilization/Assimilation"))) %>%
+  ggplot(aes(y=reorder(ta2,-fc,sum), x=fc, fill=Superclass)) +
+  scale_y_discrete(limits = rev, labels = function(x) stringr::str_wrap(x, width = 35))+
+  geom_bar(stat="identity", width=0.5,color="black") +
+  geom_errorbar(aes(xmin=fc_ll, xmax=fc_up), width=.2,
+                 position=position_dodge(.9)) +
+  labs(y = "MetaCyc Pathway", x = expression(bold(Log[2]~"Fold Change")), title = "Dietary Fiber Tertile") +
+  geom_vline(xintercept=0) +
+  scale_fill_manual("Superclass Function",values = c("#BC80BD","#FB9A99")) + 
+  xlim(c(-4,1)) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x=element_text(size=20,face="bold"),axis.text.x=element_text(size=18, hjust=1),
+        axis.title.y=element_text(size=20,face="bold"),axis.text.y=element_text(size=18),
+        legend.title = element_text(size=18,face="bold"),legend.text = element_text(size=18),
+        plot.title = element_text(size=20,face="bold")) 
 ```
