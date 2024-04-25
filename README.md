@@ -2,7 +2,7 @@
 This repository hosts the code and methodology used for filtering high-resolution sequencing data, conducting statistical analyses, and generating figures as presented in our research paper, published in npj Parkinson's Disease, 2024.
 
 ## Overview
-The purpose of this repository is to provide transparency and reproducibility for the computational analyses carried out in our study. We encourage other researchers to review, reuse, and build upon the work presented here.
+The purpose of this repository is to provide transparency and reproducibility for the computational analyses carried out in our study. 
 
 
 ## Contents
